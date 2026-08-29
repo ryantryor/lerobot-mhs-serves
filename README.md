@@ -10,12 +10,16 @@ The runtime places a safety and description layer around a LeRobot-compatible `R
 
 - `describe_device` exposes the device identity, capabilities, observations, commands, and safety boundaries;
 - `get_state` returns current observations with connection and calibration state;
+- `inspect_device` compares the active LeRobot backend with the profile and reports capability/state drift without side effects;
+- `discover_devices` lists installed LeRobot plugin candidates without importing them or probing ports;
 - `plan_action` validates an action and creates a short-lived plan without touching hardware;
 - `execute_action` simulates outside physical mode and requires host enablement plus a host-provided confirmation token in physical mode;
 - `stop` requires the backend to expose a real stop or emergency-stop method;
 - the optional MCP layer exposes these operations as agent tools.
 
 The reference server is stdio-only. Network transports are intentionally disabled until authentication, authorization, rate limiting, and a controller lease are implemented.
+
+Discovery is deliberately non-invasive: it reports installed plugin candidates and inspects the already-created backend. It does not scan serial ports, open unknown devices, or send a command. A host must explicitly construct a driver and provide its connection configuration before a device can become active.
 
 The design follows the public direction described in Anthropic's [Model Hardware Standard research preview](https://www.anthropic.com/news/model-hardware-standard-research-preview), while keeping the implementation independent and explicit about what is not official.
 
@@ -65,6 +69,8 @@ For real hardware, the host must provide a backend-specific `stop()` or `emergen
 - calibration and connection requirements;
 - explicit stop availability;
 - telemetry declaration.
+
+Inspection adds a read-only view of backend identity, feature maps, current observations, connection state, calibration state, stop availability, and differences between the live backend and its declared profile.
 
 The profile is intentionally separate from the resource directory schema in [awesome-mhs-servers](https://github.com/ryantryor/awesome-mhs-servers). The directory describes projects; this profile describes how a device can be inspected and operated.
 

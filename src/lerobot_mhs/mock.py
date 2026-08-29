@@ -33,6 +33,21 @@ class MockRobotBackend:
     def get_observation(self) -> Mapping[str, Any]:
         return {"joint_1.position": 0.0, "joint_2.position": 0.0}
 
+    def describe_backend(self) -> Mapping[str, Any]:
+        return {
+            "backend_type": type(self).__name__,
+            "robot_type": "mock_robot",
+            "robot_id": "mock-lerobot",
+            "observation_features": {
+                "joint_1.position": "number",
+                "joint_2.position": "number",
+            },
+            "action_features": {
+                "joint_1.position": "number",
+                "joint_2.position": "number",
+            },
+        }
+
     def send_action(self, action: Mapping[str, Any]) -> Mapping[str, Any]:
         self.last_action = dict(action)
         return dict(action)

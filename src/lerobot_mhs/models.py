@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -13,6 +14,7 @@ class ManifestError(ValueError):
 
 REQUIRED_FIELDS = ("schema", "device", "capabilities", "observations", "commands", "safety")
 VALID_MODES = {"simulation", "dry_run", "physical"}
+VALID_INPUT_TYPES = {"number", "integer", "boolean", "string"}
 
 
 def validate_manifest(manifest: Mapping[str, Any]) -> None:
@@ -55,6 +57,17 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
                 raise ManifestError(f"command {command_id}.{name} must be an object")
             if "type" not in spec:
                 raise ManifestError(f"command {command_id}.{name}.type is required")
+            if spec["type"] not in VALID_INPUT_TYPES:
+                raise ManifestError(f"command {command_id}.{name}.type is unsupported")
+            if any(bound in spec for bound in ("min", "max")) and spec["type"] not in {"number", "integer"}:
+                raise ManifestError(f"command {command_id}.{name} bounds require a numeric type")
+            for bound_name in ("min", "max"):
+                if bound_name in spec and (
+                    not isinstance(spec[bound_name], (int, float))
+                    or isinstance(spec[bound_name], bool)
+                    or not math.isfinite(spec[bound_name])
+                ):
+                    raise ManifestError(f"command {command_id}.{name}.{bound_name} must be finite")
             if "min" in spec and "max" in spec and spec["min"] > spec["max"]:
                 raise ManifestError(f"command {command_id}.{name} has inverted bounds")
 
@@ -65,6 +78,8 @@ def validate_manifest(manifest: Mapping[str, Any]) -> None:
     if default_mode not in VALID_MODES:
         raise ManifestError("safety.default_mode must be simulation, dry_run, or physical")
     modes = safety.get("modes", [])
+    if not isinstance(modes, list) or not modes or any(mode not in VALID_MODES for mode in modes):
+        raise ManifestError("safety.modes must be a non-empty list of valid modes")
     if default_mode not in modes:
         raise ManifestError("safety.modes must include safety.default_mode")
     if safety.get("emergency_stop") is not True:

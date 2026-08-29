@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+import math
 from threading import Lock
 from typing import Any, Protocol
 from uuid import uuid4
@@ -68,11 +69,12 @@ class MhsRuntime:
         return dict(self.manifest)
 
     def get_state(self) -> dict[str, Any]:
-        observation = _json_safe(self.backend.get_observation()) if self.backend.is_connected else None
+        connected = self.backend.is_connected
+        observation = _json_safe(self.backend.get_observation()) if connected else None
         return {
             "device_id": self.manifest["device"]["id"],
             "mode": self.mode,
-            "connected": self.backend.is_connected,
+            "connected": connected,
             "calibrated": self.backend.is_calibrated,
             "observation": observation,
             "timestamp": _now().isoformat(),
@@ -89,7 +91,28 @@ class MhsRuntime:
             "physical_confirmation_configured": bool(self.physical_confirmation_token),
         }
 
+    def inspect_device(self) -> dict[str, Any]:
+        """Read the active backend and report profile drift without side effects."""
+
+        from .inspection import inspect_device
+
+        return inspect_device(self.manifest, self.backend, json_safe=_json_safe)
+
+    def discover_devices(self) -> dict[str, Any]:
+        """Return the active device and installed plugin candidates safely."""
+
+        from .discovery import discover_lerobot_plugins
+
+        return {
+            "mode": "non-invasive",
+            "probed_hardware": False,
+            "active_device": self.inspect_device(),
+            "lerobot_plugin_candidates": discover_lerobot_plugins(),
+        }
+
     def plan_action(self, command_id: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(arguments, Mapping):
+            raise SafetyError("action arguments must be an object")
         command = self._validate_action(command_id, arguments)
         plan_id = str(uuid4())
         plan = {
@@ -101,7 +124,8 @@ class MhsRuntime:
             "expires_at": (_now() + timedelta(minutes=2)).isoformat(),
             "status": "planned",
         }
-        self._plans[plan_id] = {**plan, "command": command}
+        with self._control_lock:
+            self._plans[plan_id] = {**plan, "command": command}
         return plan
 
     def execute_action(
@@ -110,33 +134,38 @@ class MhsRuntime:
         *,
         confirmation_token: str | None = None,
     ) -> dict[str, Any]:
-        plan = self._plans.get(plan_id)
-        if plan is None:
-            raise SafetyError("unknown or expired action plan")
-        if datetime.fromisoformat(plan["expires_at"]) < _now():
-            self._plans.pop(plan_id, None)
-            raise SafetyError("action plan expired; create a new plan")
-
-        if self.mode != "physical":
-            return {
-                "plan_id": plan_id,
-                "status": "simulated",
-                "executed": False,
-                "mode": self.mode,
-                "arguments": plan["arguments"],
-            }
-        if not self.physical_execution_enabled:
-            raise SafetyError("physical execution is disabled by the host")
-        if not self.physical_confirmation_token or confirmation_token != self.physical_confirmation_token:
-            raise SafetyError("physical execution requires host-provided explicit confirmation")
-        if not self.backend.is_connected:
-            raise SafetyError("device is not connected")
-        if not self.backend.is_calibrated:
-            raise SafetyError("device is not calibrated")
-
         with self._control_lock:
-            result = self.backend.send_action(plan["arguments"])
+            plan = self._plans.get(plan_id)
+            if plan is None:
+                raise SafetyError("unknown or expired action plan")
+            if datetime.fromisoformat(plan["expires_at"]) < _now():
+                self._plans.pop(plan_id, None)
+                raise SafetyError("action plan expired; create a new plan")
+
+            if self.mode != "physical":
+                self._plans.pop(plan_id, None)
+                return {
+                    "plan_id": plan_id,
+                    "status": "simulated",
+                    "executed": False,
+                    "mode": self.mode,
+                    "arguments": plan["arguments"],
+                }
+            if not self.physical_execution_enabled:
+                raise SafetyError("physical execution is disabled by the host")
+            if not self.physical_confirmation_token or confirmation_token != self.physical_confirmation_token:
+                raise SafetyError("physical execution requires host-provided explicit confirmation")
+            if not self._has_stop():
+                raise SafetyError("physical execution requires an explicit backend stop method")
+            if not self.backend.is_connected:
+                raise SafetyError("device is not connected")
+            if not self.backend.is_calibrated:
+                raise SafetyError("device is not calibrated")
+
+            # A physical plan is single-use. If a backend partially performs an
+            # action before failing, replaying the same plan could duplicate it.
             self._plans.pop(plan_id, None)
+            result = self.backend.send_action(plan["arguments"])
             return {
                 "plan_id": plan_id,
                 "status": "executed",
@@ -149,6 +178,7 @@ class MhsRuntime:
         if not self._has_stop():
             raise SafetyError("no hardware stop method is available")
         with self._control_lock:
+            self._plans.clear()
             return {"status": "stopped", "result": _json_safe(self.backend.stop())}
 
     def _has_stop(self) -> bool:
@@ -168,8 +198,16 @@ class MhsRuntime:
             raise SafetyError(f"missing action fields: {', '.join(sorted(missing))}")
         for name, spec in inputs.items():
             value = arguments[name]
-            if spec["type"] == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
-                raise SafetyError(f"{name} must be a number")
+            value_type = spec["type"]
+            if value_type == "number":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise SafetyError(f"{name} must be a finite number")
+            elif value_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+                raise SafetyError(f"{name} must be an integer")
+            elif value_type == "boolean" and not isinstance(value, bool):
+                raise SafetyError(f"{name} must be a boolean")
+            elif value_type == "string" and not isinstance(value, str):
+                raise SafetyError(f"{name} must be a string")
             if "min" in spec and value < spec["min"]:
                 raise SafetyError(f"{name} is below the minimum boundary")
             if "max" in spec and value > spec["max"]:
@@ -184,6 +222,8 @@ def _json_safe(value: Any) -> Any:
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     tolist = getattr(value, "tolist", None)

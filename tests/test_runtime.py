@@ -46,6 +46,8 @@ def test_dry_run_never_calls_backend():
     result = runtime.execute_action(plan["plan_id"])
     assert result["status"] == "simulated"
     assert backend.last_action is None
+    with pytest.raises(SafetyError, match="unknown or expired"):
+        runtime.execute_action(plan["plan_id"])
 
 
 def test_physical_mode_requires_host_enablement_and_confirmation():
@@ -64,6 +66,30 @@ def test_physical_mode_requires_host_enablement_and_confirmation():
     result = runtime.execute_action(plan["plan_id"], confirmation_token="demo-token")
     assert result["executed"] is True
     assert backend.last_action == {"joint_1.position": 1, "joint_2.position": 2}
+
+
+def test_physical_mode_requires_a_real_stop_method():
+    runtime, backend = make_runtime("physical")
+    runtime.physical_execution_enabled = True
+    runtime.physical_confirmation_token = "demo-token"
+    backend.stop = None
+    plan = runtime.plan_action("move_joint_targets", {"joint_1.position": 1, "joint_2.position": 2})
+    with pytest.raises(SafetyError, match="explicit backend stop"):
+        runtime.execute_action(plan["plan_id"], confirmation_token="demo-token")
+
+
+def test_non_finite_numbers_are_rejected():
+    runtime, _ = make_runtime()
+    with pytest.raises(SafetyError, match="finite number"):
+        runtime.plan_action("move_joint_targets", {"joint_1.position": float("nan"), "joint_2.position": 0})
+
+
+def test_stop_invalidates_pending_plans():
+    runtime, _ = make_runtime()
+    plan = runtime.plan_action("move_joint_targets", {"joint_1.position": 1, "joint_2.position": 2})
+    runtime.stop()
+    with pytest.raises(SafetyError, match="unknown or expired"):
+        runtime.execute_action(plan["plan_id"])
 
 
 def test_stop_is_explicit():
@@ -100,3 +126,41 @@ def test_lerobot_adapter_preserves_backend_contract():
     assert adapter.is_connected is True
     assert adapter.get_observation()["joint_1.position"] == 3.0
     assert adapter.stop()["stopped"] is True
+
+
+def test_inspection_reports_profile_and_backend_alignment():
+    runtime, _ = make_runtime()
+    result = runtime.inspect_device()
+    assert result["read_only"] is True
+    assert result["status"] == "compatible"
+    assert result["operational_status"] == "ready"
+    assert result["differences"] == []
+
+
+def test_discovery_does_not_probe_hardware():
+    runtime, _ = make_runtime()
+    result = runtime.discover_devices()
+    assert result["mode"] == "non-invasive"
+    assert result["probed_hardware"] is False
+    assert result["active_device"]["read_only"] is True
+
+
+def test_inspection_reports_backend_drift():
+    runtime, backend = make_runtime()
+    backend.describe_backend = lambda: {
+        "backend_type": "mock",
+        "robot_type": "mock_robot",
+        "robot_id": "mock-lerobot",
+        "observation_features": {
+            "joint_1.position": "number",
+            "joint_2.position": "number",
+            "temperature": "number",
+        },
+        "action_features": {
+            "joint_1.position": "number",
+            "joint_2.position": "number",
+        },
+    }
+    result = runtime.inspect_device()
+    assert result["status"] == "needs_review"
+    assert any(item["kind"] == "unmapped_observation_feature" for item in result["differences"])

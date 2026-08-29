@@ -46,6 +46,17 @@ class LeRobotAdapter:
     def send_action(self, action: Mapping[str, Any]) -> Mapping[str, Any]:
         return self.robot.send_action(dict(action))
 
+    def describe_backend(self) -> Mapping[str, Any]:
+        """Expose static LeRobot metadata without connecting to hardware."""
+
+        return {
+            "backend_type": type(self.robot).__name__,
+            "robot_type": getattr(self.robot, "robot_type", getattr(self.robot, "name", None)),
+            "robot_id": getattr(self.robot, "id", None),
+            "observation_features": getattr(self.robot, "observation_features", {}),
+            "action_features": getattr(self.robot, "action_features", {}),
+        }
+
     def stop(self) -> Mapping[str, Any]:
         stop = getattr(self.robot, "stop", None) or getattr(self.robot, "emergency_stop", None)
         if not callable(stop):
