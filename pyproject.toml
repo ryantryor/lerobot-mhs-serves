@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lerobot-mhs-serves"
+version = "0.1.0"
+description = "A simulator-first MHS-compatible runtime for LeRobot hardware."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Robot Generator" }]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0,<2.0"]
+lerobot = ["lerobot>=0.4,<1.0"]
+dev = ["pytest>=8.0,<9.0"]
+
+[project.scripts]
+lerobot-mhs = "lerobot_mhs.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lerobot_mhs"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

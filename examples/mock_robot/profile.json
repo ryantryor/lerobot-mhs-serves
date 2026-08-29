@@ -1,0 +1,64 @@
+{
+  "schema": "mhs-compatible/0.1",
+  "device": {
+    "id": "mock-lerobot",
+    "kind": "robot",
+    "runtime": "lerobot",
+    "robot_type": "mock_robot"
+  },
+  "capabilities": [
+    "observe.joints",
+    "command.joint_targets",
+    "safety.stop"
+  ],
+  "observations": [
+    {
+      "id": "joint_1.position",
+      "type": "number",
+      "unit": "degree"
+    },
+    {
+      "id": "joint_2.position",
+      "type": "number",
+      "unit": "degree"
+    }
+  ],
+  "commands": [
+    {
+      "id": "move_joint_targets",
+      "input": {
+        "joint_1.position": {
+          "type": "number",
+          "min": -90,
+          "max": 90
+        },
+        "joint_2.position": {
+          "type": "number",
+          "min": -60,
+          "max": 60
+        }
+      },
+      "requires": [
+        "connected",
+        "calibrated",
+        "safety_check"
+      ]
+    }
+  ],
+  "safety": {
+    "default_mode": "dry_run",
+    "modes": [
+      "simulation",
+      "dry_run",
+      "physical"
+    ],
+    "emergency_stop": true,
+    "max_action_rate_hz": 50,
+    "requires_single_controller": true
+  },
+  "telemetry": {
+    "state": true,
+    "events": true,
+    "action_log": true
+  }
+}
